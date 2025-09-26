@@ -165,7 +165,7 @@ target/
 local.conf
 config.yaml
 
-# Claude Code and project-specific directories
-.claude
-.logs
-.dev
+# project-specific directories
+.claude/
+.logs/
+.dev/
