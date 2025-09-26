@@ -163,3 +163,9 @@ target/
 # Local configuration files (if any)
 .local
 local.conf
+config.yaml
+
+# Claude Code and project-specific directories
+.claude
+.logs
+.dev
