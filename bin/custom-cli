@@ -1,0 +1,202 @@
+#!/bin/bash
+# Generic CLI - Main Entry Point
+# Modular architecture with configuration-driven behavior
+
+set -euo pipefail
+
+# =============================================================================
+# Bootstrap and Module Loading
+# =============================================================================
+
+# Resolve script directory
+readonly CLI_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export CLI_ROOT_DIR="$(dirname "$CLI_BIN_DIR")"
+readonly CLI_LIB_DIR="$CLI_ROOT_DIR/lib"
+
+# Load core modules
+# shellcheck source=lib/config.sh
+source "$CLI_LIB_DIR/config.sh"
+
+# shellcheck source=lib/logging.sh
+source "$CLI_LIB_DIR/logging.sh"
+
+# shellcheck source=lib/process.sh
+source "$CLI_LIB_DIR/process.sh"
+
+# shellcheck source=lib/health.sh
+source "$CLI_LIB_DIR/health.sh"
+
+# shellcheck source=lib/cli.sh
+source "$CLI_LIB_DIR/cli.sh"
+
+# shellcheck source=lib/version.sh
+source "$CLI_LIB_DIR/version.sh"
+
+# Load service orchestrator (generic)
+# shellcheck source=lib/service_orchestrator.sh
+source "$CLI_LIB_DIR/service_orchestrator.sh"
+
+# Initialize modules
+config_load_defaults || die "Failed to load configuration"
+
+# =============================================================================
+# CLI Interface
+# =============================================================================
+
+# Usage function is now handled by CLI module (cli_usage)
+
+# Handle special debug commands
+handle_debug_commands() {
+    local action="$1"
+    
+    case "$action" in
+        config-debug)
+            log_info "Configuration Debug Information:"
+            config_debug
+            exit 0
+            ;;
+        version)
+            version_show_standard
+            exit 0
+            ;;
+        version-debug)
+            version_debug
+            exit 0
+            ;;
+        test-logging)
+            log_info "Testing logging system..."
+            log_debug "This is a debug message"
+            log_info "This is an info message"
+            log_warn "This is a warning message"
+            log_error "This is an error message"
+            log_success "Logging test completed"
+            exit 0
+            ;;
+        test-service-interface)
+            log_info "Testing service interface validation..."
+            if config_validate_service_interface; then
+                log_success "All service interfaces are valid"
+            else
+                log_error "Service interface validation failed"
+                exit 1
+            fi
+            # Service interfaces validated generically
+            exit 0
+            ;;
+        test-dependencies)
+            log_info "Testing dependency resolution and configuration..."
+
+            # Test all composite services defined in config
+            local composite_names
+            if composite_names=$(yaml_get_composite_names 2>/dev/null); then
+                log_info "Available composite services: $composite_names"
+
+                for composite in $composite_names; do
+                    log_info "Testing composite: $composite"
+                    local services
+                    if services=$(yaml_get_composite_services "$composite" 2>/dev/null); then
+                        log_info "  Services: $services"
+
+                        for service in $services; do
+                            local deps
+                            if deps=$(yaml_get_service_dependencies "$service" 2>/dev/null); then
+                                log_info "    $service dependencies: ${deps:-none}"
+                            fi
+                        done
+                    fi
+                done
+            else
+                log_warn "Could not load composite services from configuration"
+            fi
+
+            exit 0
+            ;;
+    esac
+    
+    return 1  # Not a debug command
+}
+
+# Dependency validation is now handled by CLI module (cli_validate_dependencies)
+
+# Main function
+main() {
+    # Parse command line arguments using CLI module
+    if ! cli_parse "$@"; then
+        cli_usage "${CLI_INVOKED_AS:-custom-cli}"
+        exit 1
+    fi
+    
+    local action="$(cli_get_action)"
+    local service="$(cli_get_service)"
+    
+    # Handle special debug commands
+    if handle_debug_commands "$action"; then
+        return 0
+    fi
+    
+    # Validate dependencies using CLI module
+    cli_validate_dependencies "$action" "$service" || exit 1
+    
+    # Log the command being executed
+    log_debug "Executing: ${CLI_INVOKED_AS:-custom-cli} $(cli_get_command_summary)"
+    
+    # Handle main commands using generic service orchestrator
+    case "$action" in
+        start)
+            if [[ -n "$service" ]]; then
+                log_info "Starting service environment: $service"
+                if orchestrator_start_composite "$service"; then
+                    log_success "Service environment '$service' started successfully"
+                else
+                    log_error "Failed to start service environment: $service"
+                    exit 1
+                fi
+            else
+                log_error "Service argument required for start action"
+                exit 1
+            fi
+            ;;
+        stop)
+            if [[ -n "$service" ]]; then
+                log_info "Stopping service environment: $service"
+                if orchestrator_stop_composite "$service"; then
+                    log_success "Service environment '$service' stopped successfully"
+                else
+                    log_error "Failed to stop service environment: $service"
+                    exit 1
+                fi
+            else
+                log_error "Service argument required for stop action"
+                exit 1
+            fi
+            ;;
+        status)
+            if [[ -n "$service" ]]; then
+                orchestrator_status_composite "$service"
+            else
+                log_error "Service argument required for status action"
+                exit 1
+            fi
+            ;;
+        logs)
+            log_list_files
+            ;;
+        help)
+            cli_usage "${CLI_INVOKED_AS:-custom-cli}"
+            ;;
+        *)
+            log_error "Unknown action '$action'"
+            cli_usage "${CLI_INVOKED_AS:-custom-cli}"
+            exit 1
+            ;;
+    esac
+}
+
+# =============================================================================
+# Entry Point
+# =============================================================================
+
+# Only run main if script is executed directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
